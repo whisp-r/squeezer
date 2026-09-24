@@ -1,0 +1,9 @@
+# Specify filepatterns you want git to ignore.
+
+ignore
+test
+/*.bak
+/*.exe
+
+assets/*
+!/assets/*.gz
