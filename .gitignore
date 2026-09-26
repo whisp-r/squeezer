@@ -3,7 +3,9 @@
 ignore
 test
 /*.bak
-/*.exe
+/*.exe*
 
 assets/*
 !/assets/*.gz
+
+/*.sublime-*
