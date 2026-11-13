@@ -2,6 +2,7 @@ package main
 
 import (
 	_ "embed"
+	"unsafe"
 
 	_ "github.com/whisp-r/squeezer/rsrc"
 
@@ -47,6 +48,14 @@ var (
 	cleanup   = flag.Bool("cleanup", false, "Cleans up the process that called it (internal)")
 )
 
+func isDev() bool {
+	self, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(self, "go-build")
+}
+
 func main() {
 	runtime.LockOSThread()
 	beeep.AppName = "Squeezer"
@@ -79,7 +88,9 @@ func main() {
 				MessageBox("Squeezer is already running.", "Squeezer", co.MB_ICONINFORMATION)
 		}
 	} else {
-		go installIfNeeded()
+		if !isDev() {
+			go installIfNeeded()
+		}
 		startMainWindow(ipc, args)
 	}
 }
@@ -88,19 +99,6 @@ func main() {
 
 func startMainWindow(ipc *IPC, initialPaths []string) {
 	currentPaths := []string{}
-
-	formatSize := func(bytes int64) string {
-		switch {
-		case bytes >= 1<<30:
-			return fmt.Sprintf("%.2f GB", float64(bytes)/(1<<30))
-		case bytes >= 1<<20:
-			return fmt.Sprintf("%.1f MB", float64(bytes)/(1<<20))
-		case bytes >= 1<<10:
-			return fmt.Sprintf("%.0f KB", float64(bytes)/(1<<10))
-		default:
-			return fmt.Sprintf("%d B", bytes)
-		}
-	}
 
 	wnd := ui.NewMain(ui.OptsMain().
 		Title("Squeezer").
@@ -220,6 +218,19 @@ func startMainWindow(ipc *IPC, initialPaths []string) {
 		Text("Right-click menu").
 		Position(ui.Dpi(170, 475)).
 		Layout(ui.LAY_HOLD_MOVE))
+
+	formatSize := func(bytes int64) string {
+		switch {
+		case bytes >= 1<<30:
+			return fmt.Sprintf("%.2f GB", float64(bytes)/(1<<30))
+		case bytes >= 1<<20:
+			return fmt.Sprintf("%.1f MB", float64(bytes)/(1<<20))
+		case bytes >= 1<<10:
+			return fmt.Sprintf("%.0f KB", float64(bytes)/(1<<10))
+		default:
+			return fmt.Sprintf("%d B", bytes)
+		}
+	}
 
 	// adding path hook
 	addPathToList := func(path string) {
@@ -374,6 +385,68 @@ func startMainWindow(ipc *IPC, initialPaths []string) {
 				chkReg.SetCheck(true)
 			}
 		}
+	})
+	setSortArrow := func(lv *ui.ListView, col int, ascending bool) {
+		for i := range lv.Cols() {
+			var fmtFlag co.HDF = co.HDF_LEFT
+			if i == col {
+				if ascending {
+					fmtFlag = co.HDF_SORTUP
+				} else {
+					fmtFlag = co.HDF_SORTDOWN
+				}
+			}
+
+			lvc := win.LVCOLUMN{
+				Mask: co.LVCF_FMT,
+				Fmt:  co.LVCFMT_C(fmtFlag),
+			}
+
+			lv.Hwnd().SendMessage(
+				co.LVM_SETCOLUMN,
+				win.WPARAM(i),
+				win.LPARAM(unsafe.Pointer(&lvc)),
+			)
+		}
+	}
+	// List view sorting, unfortunately there is no arrow indicator for now
+	// due to complex win32 unsafe api
+	sortCol := -1
+	sortAsc := true
+	listView.On().LvnColumnClick(func(p *win.NMLISTVIEW) {
+		col := int(p.ISubItem)
+
+		if sortCol == col {
+			sortAsc = !sortAsc
+		} else {
+			sortCol = col
+			sortAsc = true
+		}
+
+		slices.SortFunc(currentPaths, func(a, b string) int {
+			var cmp int
+			switch col {
+			case 0: // size
+				ai, _ := os.Stat(a)
+				bi, _ := os.Stat(b)
+				cmp = int(ai.Size() - bi.Size())
+			case 1: // name
+				cmp = strings.Compare(strings.ToLower(filepath.Base(a)), strings.ToLower(filepath.Base(b)))
+			case 2: // path
+				cmp = strings.Compare(strings.ToLower(a), strings.ToLower(b))
+			}
+			if !sortAsc {
+				cmp = -cmp
+			}
+			return cmp
+		})
+
+		listView.DeleteAllItems()
+		for _, p := range currentPaths {
+			info, _ := os.Stat(p)
+			listView.AddItem(formatSize(info.Size()), filepath.Base(p), p)
+		}
+		setSortArrow(listView, col, sortAsc)
 	})
 
 	btnAddFiles.On().BnClicked(func() {
